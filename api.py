@@ -162,7 +162,7 @@ async def search(
         # q is already $1 in params — reference it directly, do NOT append it
         # again or it shifts all subsequent $N placeholders and breaks filters.
         rank_expr = ", ts_rank(to_tsvector('english', subject), plainto_tsquery('english', $1)) AS rank"
-        order     = "ORDER BY rank DESC"
+        order = "ORDER BY sent_at ASC NULLS LAST"
     else:
         rank_expr = ""
         order     = "ORDER BY sent_at DESC NULLS LAST"
@@ -180,6 +180,22 @@ async def search(
     rows = await _query(sql, *params)
     return {"total_returned": len(rows), "results": rows}
 
+
+@app.get("/thread")
+async def get_thread(
+    subject: str = Query(..., description="Any email subject from the thread"),
+    limit:   int = Query(200, description="Max results (default 200)"),
+):
+    limit = min(limit, 200)
+    rows = await _query("""
+        SELECT email_id, sender, sender_addr, sent_at, subject, body_sha256
+        FROM emails
+        WHERE md5(regexp_replace(lower(subject), '^(re: )+', ''))
+            = md5(regexp_replace(lower($1),      '^(re: )+', ''))
+        ORDER BY sent_at ASC NULLS LAST
+        LIMIT $2
+    """, subject, limit)
+    return {"total_returned": len(rows), "results": rows}
 
 @app.get("/email/{email_id}")
 async def get_email(email_id: int):

@@ -54,7 +54,7 @@ def search_emails(
         sender_addr: Filter by sender email address (partial). e.g. "@kernel.org"
         subject:     Filter by subject line (partial). e.g. "[PATCH]"
         date_from:   Emails on or after this date. Format: YYYY-MM-DD
-        date_to:     Emails on or before this date. Format: YYYY-MM-DD
+        date_to:     date_to:     Emails on or before this date. Format: YYYY-MM-DD. When investigating a bug, set this to the bug report date to avoid seeing post-fix discussions.
         limit:       Max results (default 20, max 200).
     """
     # Only pass non-empty values as query params so api.py doesn't treat
@@ -113,6 +113,34 @@ def get_email(email_id: int) -> str:
         e.get("body") or "(no body)",
     ])
 
+@mcp.tool()
+def get_thread(subject: str, limit: int = 200) -> str:
+    """
+    Fetch all emails in the same thread as the given subject, in chronological order.
+    Use this after finding a relevant email in search_emails to get the full conversation.
+
+    Args:
+        subject: Any email subject from the thread (Re: prefixes are ignored).
+        limit:   Max emails to return (default 200).
+    """
+    resp = httpx.get(f"{API}/thread", params={"subject": subject, "limit": limit}, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    total = data["total_returned"]
+    if total == 0:
+        return "No thread found."
+
+    lines = [f"Thread: {total} email(s), oldest first:\n"]
+    for i, e in enumerate(data["results"], 1):
+        lines += [
+            f"[{i}] {e.get('subject') or '(no subject)'}",
+            f"    Sender     : {e.get('sender', '')} <{e.get('sender_addr', '')}>",
+            f"    Date (UTC) : {e.get('sent_at', '')}",
+            f"    Email ID   : {e.get('email_id', '')}",
+            "",
+        ]
+    return "\n".join(lines)
 
 @mcp.tool()
 def list_repos() -> str:
