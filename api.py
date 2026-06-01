@@ -22,7 +22,9 @@ from typing import Optional
 import asyncpg
 from fastapi import FastAPI, HTTPException, Query
 
-from db import DSN
+import os
+
+_DEFAULT_DSN = "postgresql://mailinglist:yourpassword@127.0.0.1/mailinglist"
 
 # ── Connection pool ───────────────────────────────────────────────────────────
 # A pool (min 2, max 20 connections) is used instead of a single connection so
@@ -36,7 +38,7 @@ async def lifespan(app: FastAPI):
     # Runs once on startup: open the pool, set search_path to git schema.
     global _pool
     _pool = await asyncpg.create_pool(
-        DSN,
+        os.environ.get("LKML_DB_DSN", _DEFAULT_DSN),
         min_size=2,
         max_size=20,
         server_settings={"search_path": "git,public"},

@@ -23,7 +23,6 @@ Usage:
 
 import sys
 import re
-import time
 import asyncio
 import hashlib
 import urllib.request
@@ -31,12 +30,22 @@ from html import unescape
 
 import asyncpg
 
-# ── Config ─────────────────────────────────────────────────────────────────────
 
-DB_DSN       = "postgresql://mailinglist:yourpassword@127.0.0.1:5432/mailinglist"
-SYZBOT_URL   = "https://syzkaller.appspot.com/bug?id={bug_id}"
-REQUEST_DELAY    = 2   # seconds to wait between syzkaller HTTP requests (rate limiting)
-RATE_LIMIT_WAIT  = 60  # seconds to wait after a 429 Too Many Requests response
+def _get_config() -> dict:
+    """Load runtime config from environment variables with sensible defaults."""
+    return {
+        "db_dsn": (
+            __import__("os").environ.get(
+                "LKML_DB_DSN",
+                "postgresql://mailinglist:yourpassword@127.0.0.1:5432/mailinglist",
+            )
+        ),
+        "request_delay":   2,   # seconds between syzkaller requests
+        "rate_limit_wait": 60,  # seconds to back off after a 429 response
+    }
+
+
+SYZBOT_URL = "https://syzkaller.appspot.com/bug?id={bug_id}"
 
 
 # ── Subject normalization ──────────────────────────────────────────────────────
@@ -145,7 +154,8 @@ async def find_email_ids(conn: asyncpg.Connection,
 
 # ── Per-bug ingest ─────────────────────────────────────────────────────────────
 
-async def ingest_bug(conn: asyncpg.Connection, bug_id: str) -> dict:
+async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
+                     rate_limit_wait: int = 60) -> dict:
     """
     Full pipeline for one bug ID:
       1. Scrape the syzkaller page
@@ -166,8 +176,8 @@ async def ingest_bug(conn: asyncpg.Connection, bug_id: str) -> dict:
         print(f"   ERROR scraping: {e}")
         if "429" in str(e):
             # Rate limited — back off before the caller moves to the next bug
-            print(f"   Rate limited — waiting {RATE_LIMIT_WAIT}s...")
-            time.sleep(RATE_LIMIT_WAIT)
+            print(f"   Rate limited — waiting {rate_limit_wait}s...")
+            await asyncio.sleep(rate_limit_wait)
         return {"bug_id": bug_id, "error": str(e)}
 
     print(f"   Title: {title}")
@@ -208,7 +218,8 @@ async def ingest_bug(conn: asyncpg.Connection, bug_id: str) -> dict:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main(bug_ids: list[str]) -> None:
-    conn = await asyncpg.connect(DB_DSN)
+    cfg  = _get_config()
+    conn = await asyncpg.connect(cfg["db_dsn"])
     try:
         # Ensure table + index exist before processing any bugs
         await ensure_table(conn)
@@ -216,11 +227,11 @@ async def main(bug_ids: list[str]) -> None:
 
         summaries = []
         for i, bug_id in enumerate(bug_ids):
-            summary = await ingest_bug(conn, bug_id)
+            summary = await ingest_bug(conn, bug_id, cfg["rate_limit_wait"])
             summaries.append(summary)
             # Small delay between requests to avoid rate-limiting on syzkaller
             if i < len(bug_ids) - 1:
-                time.sleep(REQUEST_DELAY)
+                await asyncio.sleep(cfg["request_delay"])
 
         # Final summary report
         print("\n══ Summary ══")

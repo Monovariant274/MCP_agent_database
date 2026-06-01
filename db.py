@@ -18,12 +18,7 @@ from typing import Optional
 import asyncpg
 from pydantic import BaseModel
 
-# DSN is read from the environment if set, otherwise falls back to the default.
-# Set LKML_DB_DSN to override without editing this file.
-DSN = os.environ.get(
-    "LKML_DB_DSN",
-    "postgresql://mailinglist:yourpassword@127.0.0.1/mailinglist",
-)
+_DEFAULT_DSN = "postgresql://mailinglist:yourpassword@127.0.0.1/mailinglist"
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -48,8 +43,9 @@ class LkmlCommit(BaseModel):
 # ── Database class ────────────────────────────────────────────────────────────
 
 class LkmlDB:
-    def __init__(self, dsn: str = DSN):
-        self.dsn  = dsn
+    def __init__(self, dsn: str = ""):
+        # Read DSN from env at init time; caller can override by passing dsn explicitly.
+        self.dsn  = dsn or os.environ.get("LKML_DB_DSN", _DEFAULT_DSN)
         self.conn: Optional[asyncpg.Connection] = None
 
     async def connect(self) -> None:

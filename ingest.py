@@ -26,23 +26,20 @@ from pathlib import Path
 
 import httpx
 
-from db import DSN, LkmlDB
+from db import LkmlDB
 
 # Default folder where all 219 git repos are cloned locally.
 # Override via CLI argument: python3 ingest.py /path/to/repos
 GIT_REPOS_FOLDER = "/home/jinghezhang/my_repos"
-
-GITHUB_ORG       = "linux-mailinglist-archives"
-PULL_CONCURRENCY = 20   # max concurrent clone/pull operations
 
 _ws = re.compile(r"\s+")   # used to collapse whitespace in email headers
 
 
 # ── GitHub repo listing ───────────────────────────────────────────────────────
 
-async def _fetch_github_repos() -> list[dict]:
+async def _fetch_github_repos(org: str) -> list[dict]:
     """
-    Return all repos in the linux-mailinglist-archives GitHub org.
+    Return all repos in the given GitHub org.
     Each entry is a dict with 'name' and 'clone_url'.
     GitHub returns at most 100 per page, so this paginates automatically.
     """
@@ -57,7 +54,7 @@ async def _fetch_github_repos() -> list[dict]:
     async with httpx.AsyncClient() as client:
         while True:
             resp = await client.get(
-                f"https://api.github.com/orgs/{GITHUB_ORG}/repos",
+                f"https://api.github.com/orgs/{org}/repos",
                 params={"per_page": 100, "page": page},
                 headers=headers,
                 timeout=30,
@@ -188,9 +185,17 @@ async def _git_show_bytes(commit: str, filepath: str, cwd: Path) -> bytes:
 # ── Ingestor ──────────────────────────────────────────────────────────────────
 
 class LkmlIngestor:
-    def __init__(self, git_repositories_folder: str = GIT_REPOS_FOLDER, dsn: str = DSN):
+    def __init__(
+        self,
+        git_repositories_folder: str = GIT_REPOS_FOLDER,
+        dsn:              str = "",
+        github_org:       str = "linux-mailinglist-archives",
+        pull_concurrency: int = 20,
+    ):
         self.db                      = LkmlDB(dsn)
         self.git_repositories_folder = git_repositories_folder
+        self.github_org              = github_org
+        self.pull_concurrency        = pull_concurrency
 
     async def pull(self) -> list[str]:
         """
@@ -200,13 +205,13 @@ class LkmlIngestor:
         a semaphore to avoid overwhelming the network or GitHub rate limits.
         """
         print("Fetching repo list from GitHub...", flush=True)
-        repos  = await _fetch_github_repos()
+        repos  = await _fetch_github_repos(self.github_org)
         folder = Path(self.git_repositories_folder)
         folder.mkdir(parents=True, exist_ok=True)
-        print(f"Found {len(repos)} repos. Syncing (concurrency={PULL_CONCURRENCY})...",
+        print(f"Found {len(repos)} repos. Syncing (concurrency={self.pull_concurrency})...",
               flush=True)
 
-        sem   = asyncio.Semaphore(PULL_CONCURRENCY)
+        sem   = asyncio.Semaphore(self.pull_concurrency)
         total = len(repos)
         done  = 0
         lock  = asyncio.Lock()  # protects the done counter across concurrent tasks
