@@ -95,9 +95,12 @@ python3 ingest_syzbot.py --file lkbench-2512.json <extra_bug_id>
 | `GET` | `/stats` | Total email and repo counts |
 | `GET` | `/repos` | All repos with email counts |
 | `GET` | `/search` | Search emails (see parameters below) |
+| `GET` | `/thread` | Fetch all emails in a thread by subject |
 | `GET` | `/email/{email_id}` | Fetch one email by integer ID |
 
 ### `/search` parameters
+
+Results are sorted by **sent time ascending** (oldest first) when `q` is given, giving a chronological view of the discussion.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -107,14 +110,22 @@ python3 ingest_syzbot.py --file lkbench-2512.json <extra_bug_id>
 | `subject` | string | Partial match on subject line |
 | `repo` | string | Partial match on repo/list name |
 | `date_from` | YYYY-MM-DD | Emails on or after this date |
-| `date_to` | YYYY-MM-DD | Emails on or before this date |
+| `date_to` | YYYY-MM-DD | Emails on or before this date. When investigating a bug, set this to the bug report date to avoid seeing post-fix discussions. |
 | `limit` | int | Max results (default 20, max 200) |
+
+### `/thread` parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `subject` | string | Any email subject from the thread — `Re:` prefixes are stripped automatically |
+| `limit` | int | Max results (default 200) |
 
 ## MCP tools (available to Claude Code)
 
 | Tool | Description |
 |---|---|
-| `search_emails(...)` | Search emails; mirrors `/search` parameters |
+| `search_emails(...)` | Search emails; mirrors `/search` parameters. Results sorted oldest-first when `query` is given. |
+| `get_thread(subject)` | Fetch all emails in the same thread, sorted oldest-first. Use after `search_emails` to get the full conversation. |
 | `get_email(email_id)` | Fetch full email body by integer ID |
 | `list_repos()` | List all 219 repos with email counts |
 | `get_stats()` | Return total email and repo counts |
