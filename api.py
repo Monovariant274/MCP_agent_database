@@ -16,7 +16,7 @@ Role in the stack:
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import asyncpg
@@ -52,6 +52,13 @@ app = FastAPI(title="LKML Git Email Search", version="1.0", lifespan=lifespan)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_date(s: str) -> datetime:
+    """Convert a YYYY-MM-DD string to a UTC-aware datetime for asyncpg.
+    asyncpg requires datetime objects for timestamptz columns — plain strings
+    cause a TypeError even when the SQL uses ::timestamptz casting."""
+    return datetime.combine(date.fromisoformat(s), datetime.min.time(), tzinfo=timezone.utc)
+
 
 async def _query(sql: str, *params) -> list[dict]:
     """Acquire a connection from the pool, run a query, return list of dicts."""
@@ -146,13 +153,13 @@ async def search(
         p += 1
 
     if date_from:
-        conditions.append(f"sent_at >= ${p}::timestamptz")
-        params.append(date_from)
+        conditions.append(f"sent_at >= ${p}")
+        params.append(_parse_date(date_from))
         p += 1
 
     if date_to:
-        conditions.append(f"sent_at <= ${p}::timestamptz")
-        params.append(date_to)
+        conditions.append(f"sent_at <= ${p}")
+        params.append(_parse_date(date_to))
         p += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -183,23 +190,48 @@ async def search(
 
 @app.get("/thread")
 async def get_thread(
-    subject: str = Query(..., description="Any email subject from the thread"),
-    limit:   int = Query(200, description="Max results (default 200)"),
+    subject:  str           = Query(..., description="Any email subject from the thread"),
+    date_to:  Optional[str] = Query(None, description="Only emails on or before YYYY-MM-DD"),
+    limit:    int           = Query(200,  description="Max results (default 200)"),
 ):
     limit = min(limit, 200)
-    rows = await _query("""
-        SELECT email_id, sender, sender_addr, sent_at, subject, body_sha256
-        FROM emails
-        WHERE md5(regexp_replace(lower(subject), '^(re: )+', ''))
-            = md5(regexp_replace(lower($1),      '^(re: )+', ''))
-        ORDER BY sent_at ASC NULLS LAST
-        LIMIT $2
-    """, subject, limit)
+    # Cutoff is enforced in SQL — nothing after date_to ever leaves the DB.
+    if date_to:
+        rows = await _query("""
+            SELECT email_id, sender, sender_addr, sent_at, subject, body_sha256
+            FROM emails
+            WHERE md5(regexp_replace(lower(subject), '^(re: )+', ''))
+                = md5(regexp_replace(lower($1),      '^(re: )+', ''))
+              AND sent_at <= $2
+            ORDER BY sent_at ASC NULLS LAST
+            LIMIT $3
+        """, subject, _parse_date(date_to), limit)
+    else:
+        rows = await _query("""
+            SELECT email_id, sender, sender_addr, sent_at, subject, body_sha256
+            FROM emails
+            WHERE md5(regexp_replace(lower(subject), '^(re: )+', ''))
+                = md5(regexp_replace(lower($1),      '^(re: )+', ''))
+            ORDER BY sent_at ASC NULLS LAST
+            LIMIT $2
+        """, subject, limit)
     return {"total_returned": len(rows), "results": rows}
 
+
 @app.get("/email/{email_id}")
-async def get_email(email_id: int):
-    rows = await _query("SELECT * FROM emails WHERE email_id=$1", email_id)
+async def get_email(
+    email_id: int,
+    cutoff:   Optional[str] = Query(None, description="Reject emails after this date YYYY-MM-DD"),
+):
+    # If a cutoff is set, add it to the WHERE clause so the DB returns nothing
+    # for emails after the cutoff — they appear as 404, not just hidden.
+    if cutoff:
+        rows = await _query(
+            "SELECT * FROM emails WHERE email_id=$1 AND sent_at <= $2",
+            email_id, _parse_date(cutoff),
+        )
+    else:
+        rows = await _query("SELECT * FROM emails WHERE email_id=$1", email_id)
     if not rows:
         raise HTTPException(status_code=404, detail=f"Email not found: {email_id}")
     return rows[0]

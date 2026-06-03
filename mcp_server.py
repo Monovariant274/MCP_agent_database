@@ -19,11 +19,34 @@ Stack:
     Claude Code  →  THIS FILE (stdio)  →  api.py (HTTP port 8001)  →  PostgreSQL
 """
 
+import os
+import sys
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 # Base URL of the FastAPI server. Must be running before this MCP server is used.
 API = "http://127.0.0.1:8001"
+
+# ── Cutoff date (student mode) ────────────────────────────────────────────────
+# When set, ALL queries are restricted to emails sent on or before this date.
+# No post-cutoff email ever leaves the database — enforced in SQL, not just hidden.
+#
+# Set via CLI:  python3 mcp_server.py --cutoff 2024-06-01
+# Set via env:  LKML_CUTOFF=2024-06-01 python3 mcp_server.py
+#
+CUTOFF_DATE: str = os.environ.get("LKML_CUTOFF", "")
+
+# Parse --cutoff from sys.argv and remove it so FastMCP doesn't see it.
+_args = sys.argv[1:]
+for _i, _a in enumerate(_args):
+    if _a == "--cutoff" and _i + 1 < len(_args):
+        CUTOFF_DATE = _args[_i + 1]
+        sys.argv = [sys.argv[0]] + _args[:_i] + _args[_i + 2:]
+        break
+
+if CUTOFF_DATE:
+    print(f"[mcp_server] Cutoff date active: emails after {CUTOFF_DATE} are blocked.",
+          file=sys.stderr)
 
 mcp = FastMCP("LKML Git Emails")
 
@@ -66,7 +89,14 @@ def search_emails(
     if sender_addr: params["sender_addr"] = sender_addr
     if subject:     params["subject"]     = subject
     if date_from:   params["date_from"]   = date_from
-    if date_to:     params["date_to"]     = date_to
+
+    # Enforce cutoff: use the stricter (earlier) of the user's date_to and CUTOFF_DATE.
+    effective_date_to = date_to
+    if CUTOFF_DATE:
+        if not effective_date_to or CUTOFF_DATE < effective_date_to:
+            effective_date_to = CUTOFF_DATE
+    if effective_date_to:
+        params["date_to"] = effective_date_to
 
     resp = httpx.get(f"{API}/search", params=params, timeout=30)
     resp.raise_for_status()
@@ -97,7 +127,10 @@ def get_email(email_id: int) -> str:
     Args:
         email_id: Integer ID returned by search_emails.
     """
-    resp = httpx.get(f"{API}/email/{email_id}", timeout=30)
+    params = {}
+    if CUTOFF_DATE:
+        params["cutoff"] = CUTOFF_DATE
+    resp = httpx.get(f"{API}/email/{email_id}", params=params, timeout=30)
     if resp.status_code == 404:
         return f"Email not found: {email_id}"
     resp.raise_for_status()
@@ -123,7 +156,10 @@ def get_thread(subject: str, limit: int = 200) -> str:
         subject: Any email subject from the thread (Re: prefixes are ignored).
         limit:   Max emails to return (default 200).
     """
-    resp = httpx.get(f"{API}/thread", params={"subject": subject, "limit": limit}, timeout=30)
+    params = {"subject": subject, "limit": limit}
+    if CUTOFF_DATE:
+        params["date_to"] = CUTOFF_DATE
+    resp = httpx.get(f"{API}/thread", params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
 

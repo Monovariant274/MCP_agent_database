@@ -29,7 +29,6 @@ import urllib.request
 from html import unescape
 
 import asyncpg
-from aiolimiter import AsyncLimiter
 
 
 def _get_config() -> dict:
@@ -41,9 +40,8 @@ def _get_config() -> dict:
                 "postgresql://mailinglist:yourpassword@127.0.0.1:5432/mailinglist",
             )
         ),
+        "request_delay":   2,   # seconds between syzkaller requests
         "rate_limit_wait": 60,  # seconds to back off after a 429 response
-        # AsyncLimiter: max 5 scrape requests per 10 seconds across all coroutines.
-        "limiter": AsyncLimiter(5, 10),
     }
 
 
@@ -157,7 +155,6 @@ async def find_email_ids(conn: asyncpg.Connection,
 # ── Per-bug ingest ─────────────────────────────────────────────────────────────
 
 async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
-                     limiter: AsyncLimiter,
                      rate_limit_wait: int = 60) -> dict:
     """
     Full pipeline for one bug ID:
@@ -172,10 +169,9 @@ async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
     print(f"\n── Bug: {bug_id}")
     print(f"   URL: {url}")
 
-    # Step 1: fetch the syzkaller page (rate-limited across all concurrent tasks)
+    # Step 1: fetch the syzkaller page
     try:
-        async with limiter:
-            title, discussion_titles = scrape_bug(bug_id)
+        title, discussion_titles = scrape_bug(bug_id)
     except Exception as e:
         print(f"   ERROR scraping: {e}")
         if "429" in str(e):
@@ -229,13 +225,13 @@ async def main(bug_ids: list[str]) -> None:
         await ensure_table(conn)
         print(f"Table git.syzbot_bugs ready.")
 
-        # Run all bugs concurrently; the shared limiter enforces 5 req/10s
-        # across all coroutines so syzkaller is never overwhelmed.
-        limiter = cfg["limiter"]
-        summaries = await asyncio.gather(
-            *[ingest_bug(conn, bug_id, limiter, cfg["rate_limit_wait"])
-              for bug_id in bug_ids]
-        )
+        summaries = []
+        for i, bug_id in enumerate(bug_ids):
+            summary = await ingest_bug(conn, bug_id, cfg["rate_limit_wait"])
+            summaries.append(summary)
+            # Small delay between requests to avoid rate-limiting on syzkaller
+            if i < len(bug_ids) - 1:
+                await asyncio.sleep(cfg["request_delay"])
 
         # Final summary report
         print("\n══ Summary ══")
