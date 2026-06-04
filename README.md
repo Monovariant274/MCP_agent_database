@@ -118,6 +118,7 @@ Results are sorted by **sent time ascending** (oldest first) when `q` is given, 
 | Parameter | Type | Description |
 |---|---|---|
 | `subject` | string | Any email subject from the thread — `Re:` prefixes are stripped automatically |
+| `date_to` | YYYY-MM-DD | Only emails on or before this date |
 | `limit` | int | Max results (default 200) |
 
 ## MCP tools (available to Claude Code)
@@ -130,12 +131,30 @@ Results are sorted by **sent time ascending** (oldest first) when `q` is given, 
 | `list_repos()` | List all 219 repos with email counts |
 | `get_stats()` | Return total email and repo counts |
 
+## Cutoff / student mode
+
+Block all emails after a given date at the SQL level — nothing after the cutoff ever leaves the database. Useful for benchmarking or preventing the agent from seeing post-fix discussions.
+
+```bash
+# Per-session (env var)
+LKML_CUTOFF=2024-06-01 claude
+
+# Per-session (CLI arg)
+python3 mcp_server.py --cutoff 2024-06-01
+
+# Permanent (set in ~/.claude.json env field for the mailinglist MCP server)
+"env": { "LKML_CUTOFF": "2024-06-01" }
+```
+
+The cutoff is enforced in three places: `search_emails` (as `date_to`), `get_thread` (as `date_to`), and `get_email` (returns 404 for blocked emails).
+
 ## Environment variables
 
 | Variable | Used in | Description |
 |---|---|---|
 | `LKML_DB_DSN` | `db.py`, `api.py`, `ingest_syzbot.py` | Full PostgreSQL DSN. Overrides the compiled-in default. |
 | `GITHUB_TOKEN` | `ingest.py` | GitHub personal access token. Raises the API rate limit from 60 to 5000 req/hour — required when fetching 219 repos. |
+| `LKML_CUTOFF` | `mcp_server.py` | Date cutoff in `YYYY-MM-DD` format. Blocks all emails after this date. |
 
 ## Database schema (quick reference)
 
