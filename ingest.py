@@ -7,8 +7,8 @@ On each run:
   3. Traverse new git commits (since the stored checkpoint) and insert emails.
 
 Run:
-    python3 ingest.py [/path/to/local/repos/folder]
-    python3 ingest.py /home/jinghezhang/my_repos --skip-pull   # resume after crash
+    python3 ingest.py /path/to/local/repos/folder
+    python3 ingest.py /path/to/local/repos/folder --skip-pull   # resume after crash
 
 Set GITHUB_TOKEN env var to avoid GitHub API rate limits on the repo listing step.
 """
@@ -30,7 +30,6 @@ from db import LkmlDB
 
 # Default folder where all 219 git repos are cloned locally.
 # Override via CLI argument: python3 ingest.py /path/to/repos
-GIT_REPOS_FOLDER = "/home/jinghezhang/my_repos"
 
 _ws = re.compile(r"\s+")   # used to collapse whitespace in email headers
 
@@ -187,7 +186,7 @@ async def _git_show_bytes(commit: str, filepath: str, cwd: Path) -> bytes:
 class LkmlIngestor:
     def __init__(
         self,
-        git_repositories_folder: str = GIT_REPOS_FOLDER,
+        git_repositories_folder: str,
         dsn:              str = "",
         github_org:       str = "linux-mailinglist-archives",
         pull_concurrency: int = 20,
@@ -333,7 +332,7 @@ class LkmlIngestor:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("folder", nargs="?", default=GIT_REPOS_FOLDER,
+    parser.add_argument("folder",
                         help="Local folder containing git repos")
     parser.add_argument("--skip-pull", action="store_true",
                         help="Skip git pull/clone and go straight to ingestion "

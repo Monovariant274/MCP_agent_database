@@ -37,18 +37,7 @@ uv pip install -r requirements.txt
 
 ### 2. Configure environment
 
-Copy the template and fill in your values:
-
-```bash
-cp .env.example .env
-# edit .env
-```
-
-Then source it before running any script:
-
-```bash
-source .env
-```
+Set environment variables as needed (see [Environment variables](#environment-variables) below). At minimum, `LKML_DB_DSN` must point to your PostgreSQL instance if it differs from the default.
 
 ### 3. Start the API server
 
@@ -64,10 +53,10 @@ The MCP server (`mcp_server.py`) is launched automatically by Claude Code via `~
 
 ```bash
 # Full run: pull all 219 repos from GitHub, then ingest new commits
-python3 ingest.py /home/jinghezhang/my_repos
+python3 ingest.py /path/to/local/repos
 
 # Resume after a crash — skips git pull, picks up from checkpoints
-python3 ingest.py /home/jinghezhang/my_repos --skip-pull
+python3 ingest.py /path/to/local/repos --skip-pull
 ```
 
 Ingestion is incremental and resume-safe. A checkpoint is saved after every commit, so re-running after a crash will not duplicate data.
@@ -123,13 +112,13 @@ Results are sorted by **sent time ascending** (oldest first) when `q` is given, 
 
 ## MCP tools (available to Claude Code)
 
-| Tool | Description |
-|---|---|
-| `search_emails(...)` | Search emails; mirrors `/search` parameters. Results sorted oldest-first when `query` is given. |
-| `get_thread(subject)` | Fetch all emails in the same thread, sorted oldest-first. Use after `search_emails` to get the full conversation. |
-| `get_email(email_id)` | Fetch full email body by integer ID |
-| `list_repos()` | List all 219 repos with email counts |
-| `get_stats()` | Return total email and repo counts |
+| Tool | Parameters | Description |
+|---|---|---|
+| `search_emails(...)` | `query, repo, sender, sender_addr, subject, date_from, date_to, limit` | Search emails by keyword/filters. Results sorted oldest-first when `query` is given. |
+| `get_thread(subject, limit)` | `subject, date_to, limit` | Fetch all emails in the same thread sorted oldest-first. `Re:` prefixes stripped automatically. |
+| `get_email(email_id)` | `email_id` | Fetch full email body by integer ID. Returns 404 if past the cutoff date. |
+| `list_repos()` | — | List all 219 repos with email counts |
+| `get_stats()` | — | Return total email and repo counts |
 
 ## Cutoff / student mode
 
