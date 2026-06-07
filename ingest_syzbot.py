@@ -154,7 +154,7 @@ async def find_email_ids(conn: asyncpg.Connection,
 
 # ── Per-bug ingest ─────────────────────────────────────────────────────────────
 
-async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
+async def ingest_bug(pool: asyncpg.Pool, bug_id: str,
                      limiter: AsyncLimiter) -> dict:
     """
     Full pipeline for one bug ID:
@@ -186,21 +186,22 @@ async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
     normalized = list({normalize_subject(t) for t in discussion_titles})
     print(f"   Unique normalized subjects: {len(normalized)}")
 
-    # Step 3: find all matching emails in git.emails
-    email_ids = await find_email_ids(conn, normalized)
-    print(f"   Matching email_ids: {len(email_ids)}")
+    async with pool.acquire() as conn:
+        # Step 3: find all matching emails in git.emails
+        email_ids = await find_email_ids(conn, normalized)
+        print(f"   Matching email_ids: {len(email_ids)}")
 
-    # Step 4: insert (bug_id, email_id) rows; skip existing ones silently
-    inserted = 0
-    for email_id in email_ids:
-        result = await conn.execute("""
-            INSERT INTO git.syzbot_bugs (bug_id, email_id)
-            VALUES ($1, $2)
-            ON CONFLICT DO NOTHING
-        """, bug_id, email_id)
-        # execute() returns a string like "INSERT 0 1" (inserted) or "INSERT 0 0" (skipped)
-        if result.endswith("1"):
-            inserted += 1
+        # Step 4: insert (bug_id, email_id) rows; skip existing ones silently
+        inserted = 0
+        for email_id in email_ids:
+            result = await conn.execute("""
+                INSERT INTO git.syzbot_bugs (bug_id, email_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+            """, bug_id, email_id)
+            # execute() returns a string like "INSERT 0 1" (inserted) or "INSERT 0 0" (skipped)
+            if result.endswith("1"):
+                inserted += 1
 
     print(f"   Inserted: {inserted}  (skipped existing: {len(email_ids) - inserted})")
     return {
@@ -216,15 +217,17 @@ async def ingest_bug(conn: asyncpg.Connection, bug_id: str,
 
 async def main(bug_ids: list[str]) -> None:
     cfg  = _get_config()
-    conn = await asyncpg.connect(cfg["db_dsn"])
+    pool = await asyncpg.create_pool(cfg["db_dsn"], min_size=2, max_size=10,
+                                     server_settings={"search_path": "git,public"})
     try:
         # Ensure table + index exist before processing any bugs
-        await ensure_table(conn)
+        async with pool.acquire() as conn:
+            await ensure_table(conn)
         print(f"Table git.syzbot_bugs ready.")
 
         limiter = cfg["limiter"]
         summaries = await asyncio.gather(
-            *[ingest_bug(conn, bug_id, limiter) for bug_id in bug_ids]
+            *[ingest_bug(pool, bug_id, limiter) for bug_id in bug_ids]
         )
 
         # Final summary report
@@ -237,7 +240,7 @@ async def main(bug_ids: list[str]) -> None:
         print(f"  Emails matched : {total_emails}")
         print(f"  Rows inserted  : {total_inserted}")
     finally:
-        await conn.close()
+        await pool.close()
 
 
 if __name__ == "__main__":
