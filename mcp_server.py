@@ -36,6 +36,7 @@ API = "http://127.0.0.1:8001"
 #
 
 CUTOFF_DATE: str = os.environ.get("LKML_CUTOFF", "")
+SESSION_TOKEN: str = os.environ.get("LKML_SESSION_TOKEN", "")
 
 # Parse --cutoff from sys.argv and remove it so FastMCP doesn't see it.
 _args = sys.argv[1:]
@@ -94,7 +95,8 @@ def search_emails(
 
 
 
-    if token:       params["token"]       = token
+    effective_token = token or SESSION_TOKEN
+    if effective_token: params["token"] = effective_token
     # Enforce cutoff: use the stricter (earlier) of the user's date_to and CUTOFF_DATE.
     effective_date_to = date_to
     if CUTOFF_DATE:
@@ -136,8 +138,9 @@ def get_email(email_id: int, token: str = "") -> str:
     """
     params = {}
     if CUTOFF_DATE:
-         params["cutoff"] = CUTOFF_DATE
-    if token: params["token"] = token
+        params["cutoff"] = CUTOFF_DATE
+    if token or SESSION_TOKEN:
+        params["token"] = token or SESSION_TOKEN
     resp = httpx.get(f"{API}/email/{email_id}", params=params, timeout=30)
     if resp.status_code == 404:
         return f"Email not found: {email_id}"
@@ -166,8 +169,9 @@ def get_thread(subject: str, limit: int = 200, token: str = "") -> str:
     """
     params = {"subject": subject, "limit": limit}
     if CUTOFF_DATE:
-         params["date_to"] = CUTOFF_DATE
-    if token: params["token"] = token
+        params["date_to"] = CUTOFF_DATE
+    if token or SESSION_TOKEN:
+        params["token"] = token or SESSION_TOKEN
     resp = httpx.get(f"{API}/thread", params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
