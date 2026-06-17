@@ -86,6 +86,7 @@ python3 ingest_syzbot.py --file lkbench-2512.json <extra_bug_id>
 | `GET` | `/search` | Search emails (see parameters below) |
 | `GET` | `/thread` | Fetch all emails in a thread by subject |
 | `GET` | `/email/{email_id}` | Fetch one email by integer ID |
+| `POST` | `/register` | Exchange registration token + cutoff date for a session token |
 
 ### `/search` parameters
 
@@ -120,9 +121,45 @@ Results are sorted by **sent time ascending** (oldest first) when `q` is given, 
 | `list_repos()` | — | List all 219 repos with email counts |
 | `get_stats()` | — | Return total email and repo counts |
 
-## Cutoff / student mode
+## Cutoff system
 
 Block all emails after a given date at the SQL level — nothing after the cutoff ever leaves the database. Useful for benchmarking or preventing the agent from seeing post-fix discussions.
+
+The cutoff is enforced in three places: `search_emails` (as `date_to`), `get_thread` (as `date_to`), and `get_email` (returns 404 for blocked emails). The system always enforces the **strictest** (earliest) of all active cutoffs.
+
+### Token-based cutoff (recommended for benchmarking)
+
+The agent never sees the cutoff date — it only receives a meaningless UUID session token. The cutoff is stored server-side in memory and enforced in SQL.
+
+```
+invoke_agent.py --cutoff 2024-06-01
+    │
+    ├── polls GET /health until API is ready
+    ├── reads registration token from /tmp/lkml_reg_token
+    ├── POST /register?token=<reg_token>&cutoff=2024-06-01
+    │       → api.py stores {session_token: cutoff_date} in _sessions
+    │       → registration token deleted immediately (one-time use)
+    └── launches claude with LKML_SESSION_TOKEN=<session_token> in env
+            │
+            └── mcp_server.py reads token from env, passes it on every call
+                    → api.py looks up cutoff from _sessions, enforces in SQL
+```
+
+```bash
+# Start the API server first (Terminal 1)
+uvicorn api:app --host 0.0.0.0 --port 8001
+
+# Register cutoff and launch claude (Terminal 2)
+python3 invoke_agent.py --cutoff 2024-06-01
+```
+
+**Security properties:**
+- Agent only ever has the session token — cannot register new sessions or loosen the cutoff
+- Registration token is one-time — deleted immediately after use
+- Cutoff date is stored server-side in memory only — not in any file the agent can read
+- Enforced in SQL — nothing after the cutoff ever leaves the database
+
+### Env-var cutoff (simple / personal use)
 
 ```bash
 # Per-session (env var)
@@ -135,15 +172,14 @@ python3 mcp_server.py --cutoff 2024-06-01
 "env": { "LKML_CUTOFF": "2024-06-01" }
 ```
 
-The cutoff is enforced in three places: `search_emails` (as `date_to`), `get_thread` (as `date_to`), and `get_email` (returns 404 for blocked emails).
-
 ## Environment variables
 
 | Variable | Used in | Description |
 |---|---|---|
 | `LKML_DB_DSN` | `db.py`, `api.py`, `ingest_syzbot.py` | Full PostgreSQL DSN. Overrides the compiled-in default. |
 | `GITHUB_TOKEN` | `ingest.py` | GitHub personal access token. Raises the API rate limit from 60 to 5000 req/hour — required when fetching 219 repos. |
-| `LKML_CUTOFF` | `mcp_server.py` | Date cutoff in `YYYY-MM-DD` format. Blocks all emails after this date. |
+| `LKML_CUTOFF` | `mcp_server.py` | Date cutoff in `YYYY-MM-DD` format. Blocks all emails after this date (env-var fallback; token system is preferred). |
+| `LKML_SESSION_TOKEN` | `mcp_server.py` | Session token issued by `invoke_agent.py`. Carries the cutoff date server-side; agent never sees the date itself. |
 
 ## Database schema (quick reference)
 
