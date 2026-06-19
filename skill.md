@@ -8,6 +8,26 @@ The API server must be running before you use any command. If you get a connecti
 
 ## Commands
 
+### Examples 
+# Stats and repos
+python3 lkml-cli.py stats
+python3 lkml-cli.py repos
+
+# Basic search
+python3 lkml-cli.py search "deadlock"
+python3 lkml-cli.py search "use-after-free" --limit 5
+
+# Filtered search
+python3 lkml-cli.py search "deadlock" --repo bpf
+python3 lkml-cli.py search --sender torvalds --limit 5
+python3 lkml-cli.py search "[PATCH]" --date-from 2023-01-01 --date-to 2024-01-01
+
+# Fetch full email (replace 12345 with a real ID from search results)
+python3 lkml-cli.py get 12345
+
+# Fetch thread (replace subject with one from search results)
+python3 lkml-cli.py thread "kernel BUG at mm/slub.c"
+
 ### Search emails
 
 ```bash

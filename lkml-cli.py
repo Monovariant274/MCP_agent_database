@@ -30,23 +30,19 @@ import httpx
 # Base URL of the running FastAPI server.
 API = "http://127.0.0.1:8001"
 
-# Session token issued by invoke_agent.py. Carries the cutoff date server-side.
-# The agent never sees or knows the cutoff date — it's just a UUID here.
+# Session token provided by invoke_agent.py. 
 SESSION_TOKEN: str = os.environ.get("LKML_SESSION_TOKEN", "")
 
-# Fallback env-var cutoff (plain date, no token system). Used if no session token.
+# Used if no session token.
 CUTOFF_DATE: str = os.environ.get("LKML_CUTOFF", "")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def add_auth(params: dict) -> dict:
-    """
-    Inject whichever cutoff mechanism is active into a params dict.
+   
+    # Inject the effective/ active cutoff mechanism. Token system takes priority. 
 
-    Token system takes priority. If neither is set, params are unchanged
-    and the API returns all emails with no date restriction.
-    """
     if SESSION_TOKEN:
         params["token"] = SESSION_TOKEN
     elif CUTOFF_DATE:
@@ -58,7 +54,7 @@ def add_auth(params: dict) -> dict:
 
 
 def get(path: str, params: dict) -> dict:
-    """Make a GET request to api.py and return parsed JSON. Exit on error."""
+    # Make a GET request to api.py and return parsed JSON.
     try:
         resp = httpx.get(f"{API}{path}", params=params, timeout=30)
     except httpx.ConnectError:
@@ -71,16 +67,12 @@ def get(path: str, params: dict) -> dict:
 # ── Subcommand handlers ───────────────────────────────────────────────────────
 
 def cmd_search(args: argparse.Namespace) -> None:
-    """
-    Search emails by keyword and/or filters.
 
-    Maps to: GET /search
-    MCP equivalent: search_emails(...)
-    """
+    # Search emails by keyword / filters. MCP equivalent: search_emails(...)
+
     params: dict = {"limit": args.limit}
 
-    # Only pass filters that were actually provided — empty strings would
-    # be treated as real filter values by the API.
+    # Only pass filters that were actually provided (empty strings would not be sent)
     if args.query:       params["q"]           = args.query
     if args.repo:        params["repo"]        = args.repo
     if args.sender:      params["sender"]      = args.sender
@@ -108,12 +100,9 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 
 def cmd_get(args: argparse.Namespace) -> None:
-    """
-    Fetch one full email by its integer ID.
+  
+    # Fetch one full email by its integer ID. MCP equivalent: get_email(email_id)
 
-    Maps to: GET /email/{id}
-    MCP equivalent: get_email(email_id)
-    """
     params: dict = {}
     if CUTOFF_DATE:
         params["cutoff"] = CUTOFF_DATE
@@ -143,15 +132,9 @@ def cmd_get(args: argparse.Namespace) -> None:
 
 
 def cmd_thread(args: argparse.Namespace) -> None:
-    """
-    Fetch all emails in a thread by subject, oldest first.
-
-    Re: prefixes are stripped automatically by the API so any email
-    subject from the thread works as input.
-
-    Maps to: GET /thread
-    MCP equivalent: get_thread(subject, limit)
-    """
+    
+    # Fetch all emails in a thread by subject, oldest first. MCP equivalent: get_thread(subject, limit)
+ 
     params: dict = {"subject": args.subject, "limit": args.limit}
     add_auth(params)
 
@@ -172,14 +155,8 @@ def cmd_thread(args: argparse.Namespace) -> None:
 
 
 def cmd_repos(_args: argparse.Namespace) -> None:
-    """
-    List all 219 mailing list repos with email counts.
+    # List all 219 mailing list repos with email counts.  MCP equivalent: list_repos()
 
-    Useful for finding exact repo names to pass to --repo in search.
-
-    Maps to: GET /repos
-    MCP equivalent: list_repos()
-    """
     data = get("/repos", {})
     repos = data["repos"]
     print(f"{len(repos)} repositories:\n")
@@ -188,12 +165,9 @@ def cmd_repos(_args: argparse.Namespace) -> None:
 
 
 def cmd_stats(_args: argparse.Namespace) -> None:
-    """
-    Print total email and repo counts.
+    
+    # Print total email and repo counts. MCP equivalent: get_stats()
 
-    Maps to: GET /stats
-    MCP equivalent: get_stats()
-    """
     data = get("/stats", {})
     print(f"Total emails : {data['total_emails']:,}")
     print(f"Repositories : {data['total_repos']}")
