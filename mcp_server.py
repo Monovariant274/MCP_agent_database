@@ -34,7 +34,9 @@ API = "http://127.0.0.1:8001"
 # Set via CLI:  python3 mcp_server.py --cutoff 2024-06-01
 # Set via env:  LKML_CUTOFF=2024-06-01 python3 mcp_server.py
 #
+
 CUTOFF_DATE: str = os.environ.get("LKML_CUTOFF", "")
+SESSION_TOKEN: str = os.environ.get("LKML_SESSION_TOKEN", "")
 
 # Parse --cutoff from sys.argv and remove it so FastMCP doesn't see it.
 _args = sys.argv[1:]
@@ -66,6 +68,7 @@ def search_emails(
     date_from:   str = "",
     date_to:     str = "",
     limit:       int = 20,
+    token:       str = "",
 ) -> str:
     """
     Search Linux kernel mailing list emails ingested from Git repositories.
@@ -90,6 +93,10 @@ def search_emails(
     if subject:     params["subject"]     = subject
     if date_from:   params["date_from"]   = date_from
 
+
+
+    effective_token = token or SESSION_TOKEN
+    if effective_token: params["token"] = effective_token
     # Enforce cutoff: use the stricter (earlier) of the user's date_to and CUTOFF_DATE.
     effective_date_to = date_to
     if CUTOFF_DATE:
@@ -97,6 +104,8 @@ def search_emails(
             effective_date_to = CUTOFF_DATE
     if effective_date_to:
         params["date_to"] = effective_date_to
+
+
 
     resp = httpx.get(f"{API}/search", params=params, timeout=30)
     resp.raise_for_status()
@@ -120,7 +129,7 @@ def search_emails(
 
 
 @mcp.tool()
-def get_email(email_id: int) -> str:
+def get_email(email_id: int, token: str = "") -> str:
     """
     Fetch one complete email by its integer ID (from search results).
 
@@ -130,6 +139,8 @@ def get_email(email_id: int) -> str:
     params = {}
     if CUTOFF_DATE:
         params["cutoff"] = CUTOFF_DATE
+    if token or SESSION_TOKEN:
+        params["token"] = token or SESSION_TOKEN
     resp = httpx.get(f"{API}/email/{email_id}", params=params, timeout=30)
     if resp.status_code == 404:
         return f"Email not found: {email_id}"
@@ -147,7 +158,7 @@ def get_email(email_id: int) -> str:
     ])
 
 @mcp.tool()
-def get_thread(subject: str, limit: int = 200) -> str:
+def get_thread(subject: str, limit: int = 200, token: str = "") -> str:
     """
     Fetch all emails in the same thread as the given subject, in chronological order.
     Use this after finding a relevant email in search_emails to get the full conversation.
@@ -159,6 +170,8 @@ def get_thread(subject: str, limit: int = 200) -> str:
     params = {"subject": subject, "limit": limit}
     if CUTOFF_DATE:
         params["date_to"] = CUTOFF_DATE
+    if token or SESSION_TOKEN:
+        params["token"] = token or SESSION_TOKEN
     resp = httpx.get(f"{API}/thread", params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()

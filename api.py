@@ -18,11 +18,16 @@ Role in the stack:
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from typing import Optional
+import pathlib
+import uuid
 
 import asyncpg
 from fastapi import FastAPI, HTTPException, Query
 
 import os
+_REG_TOKEN_PATH = pathlib.Path("/tmp/lkml_reg_token")
+_reg_token: str = ""
+_sessions: dict[str, str] = {}   # session_token → cutoff_date
 
 _DEFAULT_DSN = "postgresql://mailinglist:yourpassword@127.0.0.1/mailinglist"
 
@@ -36,17 +41,19 @@ _pool: Optional[asyncpg.Pool] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Runs once on startup: open the pool, set search_path to git schema.
-    global _pool
+    global _pool, _reg_token
     _pool = await asyncpg.create_pool(
         os.environ.get("LKML_DB_DSN", _DEFAULT_DSN),
         min_size=2,
         max_size=20,
         server_settings={"search_path": "git,public"},
     )
+    _reg_token = str(uuid.uuid4())
+    _REG_TOKEN_PATH.write_text(_reg_token)
     yield
     # Runs once on shutdown: drain and close all connections.
     await _pool.close()
-
+    _REG_TOKEN_PATH.unlink(missing_ok=True)
 
 app = FastAPI(title="LKML Git Email Search", version="1.0", lifespan=lifespan)
 
@@ -72,12 +79,36 @@ async def _queryval(sql: str, *params):
     async with _pool.acquire() as conn:
         return await conn.fetchval(sql, *params)
 
+# look up the cutoff date from the session token and compare with the user suppplied one, return the stricter one 
+def _resolve_cutoff(token: Optional[str], date_to: Optional[str]) -> Optional[str]:
+    session_cutoff = _sessions.get(token) if token else None
+    if session_cutoff and date_to:
+        return min(session_cutoff, date_to)
+    return session_cutoff or date_to
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.post("/register")
+async def register(
+    cutoff: str = Query(..., description="Cutoff date YYYY-MM-DD"),
+    token:  str = Query(..., description="Registration token from /tmp/lkml_reg_token"),
+):
+    global _reg_token
+    if not _reg_token or token != _reg_token:
+        raise HTTPException(status_code=403, detail="Invalid or already-used registration token")
+    try: 
+        date.fromisoformat(cutoff)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="cutoff must be YYYY-MM-DD")
+    _reg_token = ""
+    _REG_TOKEN_PATH.unlink(missing_ok=True)
+    session_token = str(uuid.uuid4())
+    _sessions[session_token] = cutoff
+    return {"session_token": session_token}
 
 
 @app.get("/stats")
@@ -108,8 +139,10 @@ async def search(
     date_from:   Optional[str] = Query(None, description="Emails on or after YYYY-MM-DD"),
     date_to:     Optional[str] = Query(None, description="Emails on or before YYYY-MM-DD"),
     limit:       int           = Query(20,   description="Max results (default 20, max 200)"),
+    token:       Optional[str] = Query(None, description="Session token from /register"),
 ):
     limit = min(limit, 200)
+    date_to = _resolve_cutoff(token, date_to)
 
     # Build WHERE clause incrementally.
     # Each filter appends a condition string (e.g. "sender ILIKE $2") and its
@@ -193,8 +226,10 @@ async def get_thread(
     subject:  str           = Query(..., description="Any email subject from the thread"),
     date_to:  Optional[str] = Query(None, description="Only emails on or before YYYY-MM-DD"),
     limit:    int           = Query(200,  description="Max results (default 200)"),
+    token:    Optional[str] = Query(None, description="Session token from /register"),
 ):
     limit = min(limit, 200)
+    date_to = _resolve_cutoff(token, date_to)
     # Cutoff is enforced in SQL — nothing after date_to ever leaves the DB.
     if date_to:
         rows = await _query("""
@@ -221,10 +256,13 @@ async def get_thread(
 @app.get("/email/{email_id}")
 async def get_email(
     email_id: int,
-    cutoff:   Optional[str] = Query(None, description="Reject emails after this date YYYY-MM-DD"),
+    token:    Optional[str] = Query(None, description="Session token from /register"),
+    cutoff:   Optional[str] = Query(None, description="Fallback cutoff date YYYY-MM-DD"),
+
 ):
     # If a cutoff is set, add it to the WHERE clause so the DB returns nothing
     # for emails after the cutoff — they appear as 404, not just hidden.
+    cutoff = _resolve_cutoff(token, cutoff)
     if cutoff:
         rows = await _query(
             "SELECT * FROM emails WHERE email_id=$1 AND sent_at <= $2",
